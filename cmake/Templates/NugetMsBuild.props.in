@@ -1,0 +1,55 @@
+<?xml version="1.0" ?>
+<Project ToolsVersion="4.0" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+
+    <ItemDefinitionGroup>
+
+        <ClCompile>
+            <AdditionalIncludeDirectories>${additional_include_dirs};%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+        </ClCompile>
+
+    </ItemDefinitionGroup>
+
+    <Choose>
+        <When Condition=" '$(Configuration)'=='Debug' ">
+            <ItemGroup>
+                <BinFiles Include="${additional_dlls_dbg}" />
+            </ItemGroup>
+        </When>
+
+        <When Condition=" '$(Configuration)'=='Release' ">
+            <ItemGroup>
+                <BinFiles Include="${additional_dlls_rel}"/>
+            </ItemGroup>
+        </When>
+    </Choose>
+
+    <Target Name="CopyDLLs" AfterTargets="Build">
+        <Message Text="Executing CopyDLLs task for ${CMAKE_PROJECT_NAME}" Importance="High" />
+
+        <Copy
+            SkipUnchangedFiles="True"
+            SourceFiles="@(BinFiles)"
+            DestinationFolder="$(SolutionDir)..\bin\$(Platform)\$(Configuration)\" />
+
+        <Message Text="Copied runtime libraries for ${CMAKE_PROJECT_NAME}" Importance="High" />
+    </Target>
+
+    <ItemDefinitionGroup Condition="'$(Configuration)'=='Debug'">
+
+        <Link>
+            <AdditionalLibraryDirectories>${additional_libs_dir_dbg};%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
+            <AdditionalDependencies>${additional_libs_dbg};%(AdditionalDependencies)</AdditionalDependencies>
+        </Link>
+
+    </ItemDefinitionGroup>
+    
+    <ItemDefinitionGroup Condition="'$(Configuration)'=='Release'">
+
+        <Link>
+            <AdditionalLibraryDirectories>${additional_libs_dir_rel};%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
+            <AdditionalDependencies>${additional_libs_rel};%(AdditionalDependencies)</AdditionalDependencies>
+        </Link>
+
+    </ItemDefinitionGroup>
+    
+</Project>

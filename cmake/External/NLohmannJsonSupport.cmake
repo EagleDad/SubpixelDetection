@@ -1,0 +1,27 @@
+
+set( JSON_VERSION "3.11.2")
+set( PROJECT_NAME "nlohmann_json")
+
+ExternalProject_Add(
+    ${PROJECT_NAME}
+    PREFIX ${FETCHCONTENT_BASE_DIR}/${PROJECT_NAME}
+    GIT_REPOSITORY      https://github.com/nlohmann/json.git
+    GIT_TAG             v3.11.2
+    SOURCE_DIR "${FETCHCONTENT_BASE_DIR}/${PROJECT_NAME}/${PROJECT_NAME}-${JSON_VERSION}/src/"
+    BINARY_DIR "${FETCHCONTENT_BASE_DIR}/${PROJECT_NAME}/${PROJECT_NAME}-${JSON_VERSION}/build"
+    INSTALL_DIR "${FETCHCONTENT_BASE_DIR}/${PROJECT_NAME}/${PROJECT_NAME}-${JSON_VERSION}/install"
+    CMAKE_ARGS
+    -DCMAKE_INSTALL_PREFIX:PATH=<INSTALL_DIR>
+    -DCMAKE_BUILD_TYPE=Release
+    -DCMAKE_DEBUG_POSTFIX:STRING=-d
+    -DJSON_BuildTests:BOOL=OFF
+    -DJSON_MultipleHeaders:BOOL=OFF
+)
+
+list(APPEND DEPENDENCIES ${PROJECT_NAME})
+
+set(nlohmann_json_DIR "${FETCHCONTENT_BASE_DIR}/${PROJECT_NAME}/${PROJECT_NAME}-${JSON_VERSION}/install/share/cmake/nlohmann_json")
+
+list(APPEND EXTRA_CMAKE_ARGS
+    -Dnlohmann_json_DIR:PATH=${nlohmann_json_DIR}
+)
