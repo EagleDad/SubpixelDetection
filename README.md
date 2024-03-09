@@ -1,5 +1,5 @@
 # SubpixelDetection
-Small project showing an approch fro subpixel edge detection using OpenCV
+Small project showing an approch for subpixel edge detection using OpenCV
 
 Note:
 This is a two stage build process.
