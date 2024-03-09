@@ -13,6 +13,8 @@ include_directories( ${OpenCV_INCLUDE_DIRS} )
 
 add_executable(${EXECUTABLE_NAME}
     main.cpp
+	Graph.cpp
+	Graph.h
     SubPixelDetection.cpp
     SubPixelDetection.h
 )
