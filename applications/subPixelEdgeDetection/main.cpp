@@ -50,7 +50,7 @@ void applyCanny( int, void* )
     }
 
     // Canny requires aperture size to be odd
-    int apertureSize = apertureSizes[ apertureIndex ];
+    const int32_t apertureSize = apertureSizes[ apertureIndex ];
 
     // Apply canny to get the edges
     cv::Canny( blurredSrc, edges, lowThreshold, highThreshold, apertureSize );

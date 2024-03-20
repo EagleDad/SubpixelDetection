@@ -18,6 +18,40 @@ enum class Neighbourhood
     EightConnected
 };
 
+//
+// isEqual - Any arithmetic type
+//
+template < typename T >
+std::enable_if_t< std::is_arithmetic_v< T >, bool >
+isEqual( T a, T b, T epsilon = std::numeric_limits< T >::epsilon( ) )
+{
+    if constexpr ( ! std::is_floating_point_v< T > )
+    {
+        return a == b;
+    }
+    else
+    {
+        return std::fabs( a - b ) < epsilon;
+    }
+}
+
+//
+// isZero
+//
+template < typename T >
+std::enable_if_t< std::is_arithmetic_v< T >, bool >
+isZero( T val, T epsilon = std::numeric_limits< T >::epsilon( ) )
+{
+    if constexpr ( ! std::is_floating_point_v< T > )
+    {
+        return val == T( );
+    }
+    else
+    {
+        return std::fabs( val ) <= epsilon;
+    }
+}
+
 std::vector< std::vector< cv::Point2i > >
 labelContours( const cv::Mat& imageIn );
 
@@ -64,6 +98,28 @@ traceContourPavlidis( const cv::Mat& imageIn, const cv::Point2i& startPoint );
 std::unique_ptr< Graph >
 calculateAdjacencyMatrix( const std::vector< cv::Point2i >& contourPoints );
 
+cv::Mat thinning( const cv::Mat& imageIn );
+
+int32_t thinningIteration( cv::Mat& imageA, cv::Mat& imageB,
+                           const int32_t iteration );
+
+void magnitudeNeighbourhood( const cv::Mat& derivationX,
+                             const cv::Mat& derivationY,
+                             const cv::Point2i& position,
+                             const Neighbourhood& neighbourhood,
+                             std::vector< float >& magnitudes );
+
+float amplitude( const cv::Mat& derivationX, const cv::Mat& derivationY,
+                 const cv::Point2i& position );
+
+void secondFacetModel( const std::vector< float >& magnitudes,
+                       std::vector< float >& secondFacetModel );
+
+void extractSubPixelPosition( const std::vector< float >& facetModel,
+                              const cv::Point2i& position,
+                              cv::Point2f& subPixelPoint, float& response,
+                              cv::Point2f& direction );
+
 ///
 ///
 ///
@@ -103,6 +159,7 @@ edgesSubPix( const cv::Mat& imageIn, int32_t blurSize, int32_t derivativeSize,
 
     // Note: The Canny image is not everywhere 1 pixel, we might run a thinning
     // on the edge image.
+    imageCanny = thinning( imageCanny );
 
     // To b able to get sub pixel contours, connected components needs to be
     // labeled. Why not using cv::findContours? The contours returned by
@@ -128,7 +185,46 @@ edgesSubPix( const cv::Mat& imageIn, int32_t blurSize, int32_t derivativeSize,
         // position for each contour now.
         for ( const auto& sortedContour : sortedContours )
         {
-            std::ignore = sortedContour;
+            std::vector< cv::Point2f > subPixContour;
+            subPixContour.reserve( sortedContour.size( ) );
+
+            std::vector< float > response;
+            response.reserve( sortedContour.size( ) );
+
+            std::vector< cv::Point2f > direction;
+            direction.reserve( sortedContour.size( ) );
+
+            std::vector< float > magnitudes( 9 );
+
+            std::vector< float > facetModel( 6 );
+
+            float resp;
+
+            cv::Point2f dir;
+
+            for ( const auto& point : sortedContour )
+            {
+                cv::Point2f subPixelPoint;
+
+                magnitudeNeighbourhood( imageSobelX,
+                                        imageSobelY,
+                                        point,
+                                        Neighbourhood::EightConnected,
+                                        magnitudes );
+
+                secondFacetModel( magnitudes, facetModel );
+
+                extractSubPixelPosition(
+                    facetModel, point, subPixelPoint, resp, dir );
+
+                subPixContour.emplace_back( subPixelPoint );
+
+                response.emplace_back( resp );
+
+                direction.emplace_back( dir );
+            }
+
+            subPixelContours.push_back( subPixContour );
         }
     }
 
@@ -789,4 +885,529 @@ calculateAdjacencyMatrix( const std::vector< cv::Point2i >& contourPoints )
     }
 
     return graph;
+}
+
+/**
+ * @brief This function performs a thinning on a region
+ *
+ * @param [in]   imageIn            The input single channel 8 bit image
+ *
+ *  @return The thinned output image
+ *
+ * The thinning algorithm is base on the paper from T.Y. Zhang and C.Y. Suen
+ * form 1984 It describes a parallel approach to thin binary structures im
+ * two sub-iterations The algorithm is considering the 8 neighbors tto the
+ * current pixel location.
+ *
+ *         P9              P2              P3
+ *   (y - 1, x - 1)    (y - 1, x)    (y - 1, x + 1)
+ *
+ *         P8              P1              P4
+ *     (y, x - 1)        (y, x)        (y, x + 1)
+ *
+ *         P7              P6              P5
+ *    (y + 1, x - 1)   (y + 1, x)    (y + 1, x + 1)
+ *
+ *    Consider: The algorithm is expecting a binary image [0 : 1]
+ *
+ *    B(P1) is the sum of nonzero neighbors of P1.
+ *    B(P1) = P2 + P3 + P4 + P5 + P6 + P7 + P8 + P9)
+ *
+ *    A(P1) is the number of transitions from 0 to 1 in the following order
+ *    P2 P3 P4 P5 P6 P7 P8 P9 P2
+ *
+ *    Steps Iteration 1 -> Conditions to satisfy
+ *    2 <= B(P1) <= 6
+ *    A(P1) == 1
+ *    P2 * P4 * P6 == 0
+ *    P4 * P6 * P8 == 0
+ *
+ *    Steps Iteration 2 -> Conditions to satisfy
+ *    2 <= B(P1) <= 6
+ *    A(P1) == 1
+ *    P2 * P4 * P8 == 0
+ *    P2 * P6 * P8 == 0
+ *
+ */
+cv::Mat thinning( const cv::Mat& imageIn )
+{
+    // let border be the same in all directions
+    constexpr int32_t border = 1;
+    // constructs a larger image to fit both the image and the border
+    cv::Mat workImageA( imageIn.rows + border * 2,
+                        imageIn.cols + border * 2,
+                        imageIn.depth( ) );
+
+    cv::copyMakeBorder( imageIn,
+                        workImageA,
+                        border,
+                        border,
+                        border,
+                        border,
+                        cv::BORDER_CONSTANT,
+                        cv::Scalar::all( 0 ) );
+
+    const auto outRect = cv::Rect( 1, 1, imageIn.cols, imageIn.rows );
+
+    int32_t changedPixels;
+
+    cv::Mat workImageB = workImageA.clone( );
+
+    do
+    {
+        changedPixels = thinningIteration( workImageA, workImageB, 0 );
+
+        workImageB.copyTo( workImageA );
+
+        changedPixels +=
+            thinningIteration( // NOLINT(readability-suspicious-call-argument)
+                workImageB,
+                workImageA,
+                1 );
+
+        workImageA.copyTo( workImageB );
+
+    } while ( changedPixels > 0 );
+
+    return { workImageA( outRect ) };
+}
+
+int32_t thinningIteration( cv::Mat& imageA, cv::Mat& imageB,
+                           const int32_t iteration )
+{
+    int32_t changedPixel { };
+
+    std::array< uint8_t, 9 > neighbors { };
+
+    auto getNeighbors =
+        [ &neighbors, &imageA ]( const int32_t x, const int32_t y )
+    {
+        const auto rowPtrYP1 = imageA.ptr< uint8_t >( y + 1 );
+        const auto rowPtrY = imageA.ptr< uint8_t >( y );
+        const auto rowPtrYM1 = imageA.ptr< uint8_t >( y - 1 );
+
+        constexpr auto lbl = uint8_t { 255 };
+
+        neighbors[ 0 ] =
+            rowPtrY[ x ] == lbl ? uint8_t { 1 } : uint8_t { 0 }; // P1
+
+        neighbors[ 1 ] =
+            rowPtrYM1[ x ] == lbl ? uint8_t { 1 } : uint8_t { 0 }; // P2
+
+        neighbors[ 2 ] =
+            rowPtrYM1[ x + 1 ] == lbl ? uint8_t { 1 } : uint8_t { 0 }; // P3
+
+        neighbors[ 3 ] =
+            rowPtrY[ x + 1 ] == lbl ? uint8_t { 1 } : uint8_t { 0 }; // P4
+
+        neighbors[ 4 ] =
+            rowPtrYP1[ x + 1 ] == lbl ? uint8_t { 1 } : uint8_t { 0 }; // P5
+
+        neighbors[ 5 ] =
+            rowPtrYP1[ x ] == lbl ? uint8_t { 1 } : uint8_t { 0 }; // P6
+
+        neighbors[ 6 ] =
+            rowPtrYP1[ x - 1 ] == lbl ? uint8_t { 1 } : uint8_t { 0 }; // P7
+
+        neighbors[ 7 ] =
+            rowPtrY[ x - 1 ] == lbl ? uint8_t { 1 } : uint8_t { 0 }; // P8
+
+        neighbors[ 8 ] =
+            rowPtrYM1[ x - 1 ] == lbl ? uint8_t { 1 } : uint8_t { 0 }; // P9
+    };
+
+    auto getTransitions = [ & ]( )
+    {
+        uint8_t transitions { };
+        // P2 P3 P4 P5 P6 P7 P8 P9 P2
+        transitions += neighbors[ 1 ] == 0 && neighbors[ 2 ] != 0; // P2 - P3
+        transitions += neighbors[ 2 ] == 0 && neighbors[ 3 ] != 0; // P3 - P4
+        transitions += neighbors[ 3 ] == 0 && neighbors[ 4 ] != 0; // P4 - P5
+        transitions += neighbors[ 4 ] == 0 && neighbors[ 5 ] != 0; // P5 - P6
+        transitions += neighbors[ 5 ] == 0 && neighbors[ 6 ] != 0; // P6 - P7
+        transitions += neighbors[ 6 ] == 0 && neighbors[ 7 ] != 0; // P7 - P8
+        transitions += neighbors[ 7 ] == 0 && neighbors[ 8 ] != 0; // P8 - P9
+        transitions += neighbors[ 8 ] == 0 && neighbors[ 1 ] != 0; // P9 - P2
+
+        return transitions;
+    };
+
+    auto sumNeighbors = [ & ]( )
+    {
+        uint8_t sum { };
+        sum += neighbors[ 1 ];
+        sum += neighbors[ 2 ];
+        sum += neighbors[ 3 ];
+        sum += neighbors[ 4 ];
+        sum += neighbors[ 5 ];
+        sum += neighbors[ 6 ];
+        sum += neighbors[ 7 ];
+        sum += neighbors[ 8 ];
+        return sum;
+    };
+
+    for ( int32_t y = 1; y < imageA.rows - 1; ++y )
+    {
+        const auto rowPtrSrcA = imageA.ptr< uint8_t >( y );
+        const auto rowPtrSrcB = imageB.ptr< uint8_t >( y );
+
+        for ( int32_t x = 1; x < imageA.cols - 1; ++x )
+        {
+            if ( *( rowPtrSrcA + x ) != 0 )
+            {
+                //  0  1  2  3  4  5  6  7  8
+                //  P1 P2 P3 P4 P5 P6 P7 P8 P9
+                getNeighbors( x, y );
+
+                const auto A = getTransitions( );
+
+                const auto B = sumNeighbors( );
+
+                const auto m1 = iteration == 0
+                                    ? static_cast< uint8_t >(
+                                          neighbors[ 1 ] * neighbors[ 3 ] *
+                                          neighbors[ 5 ] ) // P2 * P4 * P6
+                                    : static_cast< uint8_t >(
+                                          neighbors[ 1 ] * neighbors[ 3 ] *
+                                          neighbors[ 7 ] ); // P2 * P4 * P8
+                const auto m2 = iteration == 0
+                                    ? static_cast< uint8_t >(
+                                          neighbors[ 3 ] * neighbors[ 5 ] *
+                                          neighbors[ 7 ] ) // P4 * P6 * P8
+                                    : static_cast< uint8_t >(
+                                          neighbors[ 1 ] * neighbors[ 5 ] *
+                                          neighbors[ 7 ] ); // P2 * P6 * P8
+
+                if ( A == uint8_t { 1 } &&
+                     ( B >= uint8_t { 2 } && B <= uint8_t { 6 } ) &&
+                     m1 == uint8_t { 0 } && m2 == uint8_t { 0 } )
+                {
+                    changedPixel++;
+                    rowPtrSrcB[ x ] = uint8_t { 0 };
+                }
+            }
+        }
+    }
+
+    return changedPixel;
+}
+
+/*
+ * Function that returns the magnitude neighbourhood for a certain pixel
+ *
+ * @param [in]  derivationX     The derivative in x direction
+ * @param [in]  derivationY     The derivative in y direction
+ * @param [in]  position        The current position
+ * @param [in]  neighbourhood   The neighbourhood to use
+ * @param [in]  magnitudes      A vector receiving the results
+ *
+ */
+void magnitudeNeighbourhood( const cv::Mat& derivationX,
+                             const cv::Mat& derivationY,
+                             const cv::Point2i& position,
+                             const Neighbourhood& neighbourhood,
+                             std::vector< float >& magnitudes )
+{
+    const auto imageWidth = derivationX.cols;
+    const auto imageHeight = derivationX.rows;
+
+    const auto x = position.x;
+    const auto y = position.y;
+
+    const auto top = y - 1 >= 0 ? y - 1 : y;
+    const auto down = y + 1 < imageHeight ? y + 1 : y;
+    const auto left = x - 1 >= 0 ? x - 1 : x;
+    const auto right = x + 1 < imageWidth ? x + 1 : x;
+
+    switch ( neighbourhood )
+    {
+    case Neighbourhood::FourConnected:
+    {
+        magnitudes[ 0 ] =
+            amplitude( derivationX, derivationY, cv::Point2i( x, top ) );
+        magnitudes[ 1 ] =
+            amplitude( derivationX, derivationY, cv::Point2i( left, y ) );
+        magnitudes[ 2 ] =
+            amplitude( derivationX, derivationY, cv::Point2i( x, y ) );
+        magnitudes[ 3 ] =
+            amplitude( derivationX, derivationY, cv::Point2i( right, y ) );
+        magnitudes[ 4 ] =
+            amplitude( derivationX, derivationY, cv::Point2i( x, down ) );
+        break;
+    }
+
+    case Neighbourhood::EightConnected:
+    {
+        magnitudes[ 0 ] =
+            amplitude( derivationX, derivationY, cv::Point2i( left, top ) );
+        magnitudes[ 1 ] =
+            amplitude( derivationX, derivationY, cv::Point2i( x, top ) );
+        magnitudes[ 2 ] =
+            amplitude( derivationX, derivationY, cv::Point2i( right, top ) );
+        magnitudes[ 3 ] =
+            amplitude( derivationX, derivationY, cv::Point2i( left, y ) );
+        magnitudes[ 4 ] =
+            amplitude( derivationX, derivationY, cv::Point2i( x, y ) );
+        magnitudes[ 5 ] =
+            amplitude( derivationX, derivationY, cv::Point2i( right, y ) );
+        magnitudes[ 6 ] =
+            amplitude( derivationX, derivationY, cv::Point2i( left, down ) );
+        magnitudes[ 7 ] =
+            amplitude( derivationX, derivationY, cv::Point2i( x, down ) );
+        magnitudes[ 8 ] =
+            amplitude( derivationX, derivationY, cv::Point2i( right, down ) );
+        break;
+    }
+    }
+}
+
+/*
+ * Function that calculates the amplitude of an image at a certain position
+ *
+ * @param [in]  derivationX     The derivative in x direction
+ * @param [in]  derivationY     The derivative in y direction
+ * @param [in]  position        The current position
+ *
+ */
+float amplitude( const cv::Mat& derivationX, const cv::Mat& derivationY,
+                 const cv::Point2i& position )
+{
+    const auto x = position.x;
+    const auto y = position.y;
+
+    const auto rowPtrX = derivationX.ptr< int16_t >( y );
+    const auto rowPtrY = derivationY.ptr< int16_t >( y );
+
+    return static_cast< float >( std::abs( rowPtrX[ x ] ) +
+                                 std::abs( rowPtrY[ x ] ) );
+}
+
+/*
+ * Function that calculates second facet model for a certain pixel based on the
+ * magnitude neighbourhood.
+ *
+ * @param [in]  magnitudes          The magnitudes for the pixel position
+ * @param [in]  secondFacetModel    A vector receiving the second faced model.
+ *
+ */
+void secondFacetModel( const std::vector< float >& magnitudes,
+                       std::vector< float >& secondFacetModel )
+{
+    if ( secondFacetModel.size( ) != 6 && magnitudes.size( ) != 9 )
+    {
+        throw std::invalid_argument(
+            "The size of the incoming vector for the second "
+            "facet model or the magnitudes is wrong" );
+    }
+
+    secondFacetModel[ 0 ] = static_cast< float >(
+        ( magnitudes[ 0 ] + magnitudes[ 1 ] + magnitudes[ 2 ] +
+          magnitudes[ 3 ] + magnitudes[ 4 ] + magnitudes[ 5 ] +
+          magnitudes[ 6 ] + magnitudes[ 7 ] + magnitudes[ 8 ] ) /
+        9.0 );
+
+    secondFacetModel[ 1 ] = static_cast< float >(
+        ( -magnitudes[ 0 ] + magnitudes[ 2 ] - magnitudes[ 3 ] +
+          magnitudes[ 5 ] - magnitudes[ 6 ] + magnitudes[ 8 ] ) /
+        6.0 );
+
+    secondFacetModel[ 2 ] = static_cast< float >(
+        ( magnitudes[ 6 ] + magnitudes[ 7 ] + magnitudes[ 8 ] -
+          magnitudes[ 0 ] - magnitudes[ 1 ] - magnitudes[ 2 ] ) /
+        6.0 );
+
+    secondFacetModel[ 3 ] = static_cast< float >(
+        ( magnitudes[ 0 ] - 2.0 * magnitudes[ 1 ] + magnitudes[ 2 ] +
+          magnitudes[ 3 ] - 2.0 * magnitudes[ 4 ] + magnitudes[ 5 ] +
+          magnitudes[ 6 ] - 2.0 * magnitudes[ 7 ] + magnitudes[ 8 ] ) /
+        6.0 );
+
+    secondFacetModel[ 4 ] =
+        static_cast< float >( ( -magnitudes[ 0 ] + magnitudes[ 2 ] +
+                                magnitudes[ 6 ] - magnitudes[ 8 ] ) /
+                              4.0 );
+
+    secondFacetModel[ 5 ] = static_cast< float >(
+        ( magnitudes[ 0 ] + magnitudes[ 1 ] + magnitudes[ 2 ] -
+          2.0 * ( magnitudes[ 3 ] + magnitudes[ 4 ] + magnitudes[ 5 ] ) +
+          magnitudes[ 6 ] + magnitudes[ 7 ] + magnitudes[ 8 ] ) /
+        6.0 );
+}
+
+/*
+ * Function that calculates the sub pixel coordinate for a certain pixel using
+ * the second faced model
+ *
+ * @param [in]  magnitudes          The magnitudes for the pixel position
+ * @param [in]  secondFacetModel    A vector receiving the second faced model.
+ *
+ */
+void extractSubPixelPosition( const std::vector< float >& facetModel,
+                              const cv::Point2i& position,
+                              cv::Point2f& subPixelPoint, float& response,
+                              cv::Point2f& direction )
+{
+    //     | a     b |
+    // H:= |         |
+    //     | c     d |
+
+    //     | fxx fxy |
+    // H:= |         |
+    //     | fyx fyy |
+
+    // derivatives
+    // f    = fm[ 0 ]
+    // fx   = fm[ 1 ]
+    // fy   = fm[ 2 ]
+    // fxy  = fm[ 4 ]
+    // fxx  = fm[ 3 ]
+    // fyy  = fm[ 5 ]
+
+    const auto f = facetModel[ 0 ];
+    const auto fx = facetModel[ 1 ];
+    const auto fy = facetModel[ 2 ];
+    const auto fxy = facetModel[ 4 ];
+    const auto fxx = facetModel[ 3 ];
+    const auto fyy = facetModel[ 5 ];
+    std::ignore = f;
+
+    cv::Point2f eigenVector1;
+    cv::Point2f eigenVector2;
+
+    // According to the paper we need to calculate the eigenvalues and
+    // eigenvectors of the hessian to determine the subpixel position
+    // https://people.math.harvard.edu/~knill/teaching/math21b2004/exhibits/2dmatrices/index.html
+
+    //        (fxx + fyy)       (4 * fxy^2 + (fxx - fyy)^2)^1/2
+    // L1,2 = -----------  +/-  -------------------------------
+    //             2                            2
+
+    const auto firstTerm = 0.5f * ( fxx + fyy );
+    const auto secondTerm =
+        0.5f * std::sqrt( 4.0f * fxy * fxy + ( fxx - fyy ) * ( fxx - fyy ) );
+
+    auto eigenValue1 = firstTerm - secondTerm;
+
+    auto eigenValue2 = firstTerm + secondTerm;
+
+    if ( eigenValue2 > eigenValue1 )
+    {
+        std::swap( eigenValue1, eigenValue2 );
+    }
+
+    // If element b or c is equal to zero we cannot calculate the eigenvectors.
+    // We set the eigenvectors to [0, 1] and [1, 0]
+    if ( isZero( fxy ) )
+    {
+        eigenVector1 = { 1.0, 0.0 };
+        eigenVector2 = { 0.0, 1.0 };
+    }
+    else
+    {
+        // To get the corresponding eigenvector we need to full fill
+        // ( A - lambda * I) * v = 0
+        //
+        // | (a - lambda)       b       |   | x |   | 0 |
+        // |                            | * |   | = |   |
+        // |      c        (d - lambda) |   | y |   | 0 |
+        //
+        // (a - lambda) * x + b * y = 0
+        // c * x + (d - lambda) * y = 0
+        //
+        // y = (lambda - a) * x / b
+        // y = c * x / (lambda - d)
+        //
+        // y = y
+        //
+        // (lambda - a) * x       c * x
+        // ----------------- = -------------
+        //         b           (lambda - d)
+        //
+        // Choosing x to be denominator of each fraction
+        //
+        // lambda - a        c
+        // ----------- = ----------
+        //      b        lambda - d
+        //
+        // e.g x = b leads to
+        // x = b and y = lambda - a
+        //
+        // e.g x = c  leads to
+        //
+        // reforming
+        // x = y * (lambda - d) / c and choosing y = c leads to
+        // x = lambda - d and y = c
+        //
+        //      |     b      |        | lambda - d |
+        // v1 = |            | ; v2 = |            |
+        //      | lambda - a |        |     c      |
+
+        // Now we need the corresponding eigenvectors
+        eigenVector1 = { fxy, eigenValue1 - fxx };
+        eigenVector2 = { eigenValue2 - fyy, fxy };
+
+        eigenVector1 /= cv::norm( eigenVector1 );
+        eigenVector2 /= cv::norm( eigenVector2 );
+    }
+
+    // For the subpixel position we need the eigenvalue with the highest
+    // absolute value
+    // The largest eigenvalue of G is the equivalent of the gradient
+    // magnitude
+    double nx;
+    double ny;
+    if ( std::abs( eigenValue1 ) > std::abs( eigenValue2 ) )
+    {
+        nx = eigenVector1.x;
+        ny = eigenVector1.y;
+        response = static_cast< float >( std::abs( eigenValue1 ) );
+    }
+    else
+    {
+        nx = eigenVector2.x;
+        ny = eigenVector2.y;
+        response = static_cast< float >( std::abs( eigenValue2 ) );
+    }
+
+    // Having the highest eigenvalue and corresponding eigenvector defined on
+    // position 1 we can calculate the sub pixel offset described in the paper.
+
+    //                    rx * nx + ry * ny
+    // t = - -------------------------------------------
+    //       rxx * nx^2 + 2 * rxy * nx * ny + ryy * ny^2
+
+    const auto divisor = fxx * nx * nx + 2.0 * fxy * nx * ny + fyy * ny * ny;
+    double t { };
+    if ( ! isZero( divisor ) )
+    {
+        t = -( fx * nx + fy * ny ) / divisor;
+    }
+
+    // Having t the sub pixel point is defined as:
+    // (px, py) = (t * nx, t * ny)
+    // And the rule for (px, py) ELEMENT [-0.5, 0.5] X [-0.5, 0.5]
+    double px = nx * t;
+    double py = ny * t;
+
+    if ( std::fabs( px ) > 0.5 )
+    {
+        px = 0.0;
+    }
+
+    if ( std::fabs( py ) > 0.5 )
+    {
+        py = 0.0;
+    }
+
+    auto x = static_cast< double >( position.x );
+    auto y = static_cast< double >( position.y );
+
+    x += px;
+    y += py;
+
+    subPixelPoint = { static_cast< float >( x ), static_cast< float >( y ) };
+
+    direction = { static_cast< float >( nx ), static_cast< float >( ny ) };
+    // const double a = std::atan2( y, x );
+    // direction = a >= 0.0 ? a : a + CV_2PI;
 }
