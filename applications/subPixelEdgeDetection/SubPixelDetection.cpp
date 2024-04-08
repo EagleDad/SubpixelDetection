@@ -1,6 +1,9 @@
 #include "SubPixelDetection.h"
 #include "Graph.h"
 
+// Std includes
+#include <iostream>
+
 // OpenCV includes
 #include <opencv2/imgproc.hpp>
 
@@ -115,18 +118,49 @@ float amplitude( const cv::Mat& derivationX, const cv::Mat& derivationY,
 void secondFacetModel( const std::vector< float >& magnitudes,
                        std::vector< float >& secondFacetModel );
 
-void extractSubPixelPosition( const std::vector< float >& facetModel,
-                              const cv::Point2i& position,
+void extractSubPixelPosition( const cv::Mat& image, const cv::Point& pos,
+                              const cv::Mat& derivativeX,
+                              const cv::Mat& derivativeY,
                               cv::Point2f& subPixelPoint, float& response,
                               cv::Point2f& direction );
 
+void extractSubPixelPositionSecondFacet(
+    const cv::Mat& image, const cv::Point& pos, const cv::Mat& derivativeX,
+    const cv::Mat& derivativeY, cv::Point2f& subPixelPoint, float& response,
+    cv::Point2f& direction );
+
+void extractSubPixelPositionInterpolation(
+    const cv::Mat& image, const cv::Point& pos, const cv::Mat& derivativeX,
+    const cv::Mat& derivativeY, cv::Point2f& subPixelPoint, float& response,
+    cv::Point2f& direction );
+
+void calculateEigenValuesVectors( const cv::Mat& src, float& eigenValue1,
+                                  float& eigenValue2, cv::Point2f& eigenVector1,
+                                  cv::Point2f& eigenVector2 );
+
+void calculateEigenValuesVectorsCv( const cv::Mat& src, float& eigenValue1,
+                                    float& eigenValue2,
+                                    cv::Point2f& eigenVector1,
+                                    cv::Point2f& eigenVector2 );
+
+void calculateEigenValuesVectorsSelf( const cv::Mat& src, float& eigenValue1,
+                                      float& eigenValue2,
+                                      cv::Point2f& eigenVector1,
+                                      cv::Point2f& eigenVector2 );
+
+void imageNeighbourhood( const cv::Mat& image, const cv::Point2i& position,
+                         const Neighbourhood& neighbourhood,
+                         std::vector< float >& magnitudes );
+
+float pixelValue( const cv::Mat& image, const cv::Point2i& position );
+
 ///
 ///
 ///
 
-std::vector< std::vector< cv::Point2f > >
-edgesSubPix( const cv::Mat& imageIn, int32_t blurSize, int32_t derivativeSize,
-             double lowThreshold, double highThreshold )
+std::vector< Contour > edgesSubPix( const cv::Mat& imageIn, int32_t blurSize,
+                                    int32_t derivativeSize, double lowThreshold,
+                                    double highThreshold )
 {
     // First we need to blur the image with a gaussian
     cv::Mat imageBlurred;
@@ -169,8 +203,7 @@ edgesSubPix( const cv::Mat& imageIn, int32_t blurSize, int32_t derivativeSize,
 
     // Now that we've found the pixel precise contour points, we can calculate
     // the subpixel position for each point.
-    std::vector< std::vector< cv::Point2f > > subPixelContours;
-    subPixelContours.reserve( contoursPix.size( ) );
+    std::vector< Contour > subPixelContours;
 
     for ( auto& currentContour : contoursPix )
     {
@@ -185,46 +218,33 @@ edgesSubPix( const cv::Mat& imageIn, int32_t blurSize, int32_t derivativeSize,
         // position for each contour now.
         for ( const auto& sortedContour : sortedContours )
         {
-            std::vector< cv::Point2f > subPixContour;
-            subPixContour.reserve( sortedContour.size( ) );
-
-            std::vector< float > response;
-            response.reserve( sortedContour.size( ) );
-
-            std::vector< cv::Point2f > direction;
-            direction.reserve( sortedContour.size( ) );
-
-            std::vector< float > magnitudes( 9 );
-
-            std::vector< float > facetModel( 6 );
+            Contour current;
+            current.subPixContour.reserve( sortedContour.size( ) );
+            current.response.reserve( sortedContour.size( ) );
+            current.direction.reserve( sortedContour.size( ) );
 
             float resp;
-
             cv::Point2f dir;
+            cv::Point2f subPixelPoint;
 
             for ( const auto& point : sortedContour )
             {
-                cv::Point2f subPixelPoint;
+                extractSubPixelPosition( imageBlurred,
+                                         point,
+                                         imageSobelX,
+                                         imageSobelY,
+                                         subPixelPoint,
+                                         resp,
+                                         dir );
 
-                magnitudeNeighbourhood( imageSobelX,
-                                        imageSobelY,
-                                        point,
-                                        Neighbourhood::EightConnected,
-                                        magnitudes );
+                current.subPixContour.emplace_back( subPixelPoint );
 
-                secondFacetModel( magnitudes, facetModel );
+                current.response.emplace_back( resp );
 
-                extractSubPixelPosition(
-                    facetModel, point, subPixelPoint, resp, dir );
-
-                subPixContour.emplace_back( subPixelPoint );
-
-                response.emplace_back( resp );
-
-                direction.emplace_back( dir );
+                current.direction.emplace_back( dir );
             }
 
-            subPixelContours.push_back( subPixContour );
+            subPixelContours.push_back( current );
         }
     }
 
@@ -1236,17 +1256,58 @@ void secondFacetModel( const std::vector< float >& magnitudes,
 
 /*
  * Function that calculates the sub pixel coordinate for a certain pixel using
- * the second faced model
+ * interpolation along the gradient
  *
- * @param [in]  magnitudes          The magnitudes for the pixel position
- * @param [in]  secondFacetModel    A vector receiving the second faced model.
+ * @param [in]  image           The input image
+ * @param [in]  pos             The current position
+ * @param [in]  derivativeX     The derivative of the image in x direction
+ * @param [in]  derivativeY     The derivative of the image in y direction
+ * @param [in]  subPixelPoint   The calculated subpixel point
+ * @param [in]  response        The calculated response
+ * @param [in]  direction       The calculated direction
  *
  */
-void extractSubPixelPosition( const std::vector< float >& facetModel,
-                              const cv::Point2i& position,
+void extractSubPixelPosition( const cv::Mat& image, const cv::Point& pos,
+                              const cv::Mat& derivativeX,
+                              const cv::Mat& derivativeY,
                               cv::Point2f& subPixelPoint, float& response,
                               cv::Point2f& direction )
 {
+    /*extractSubPixelPositionSecondFacet( image,
+                                        pos,
+                                        derivativeX,
+                                        derivativeY,
+                                        subPixelPoint,
+                                        response,
+                                        direction );*/
+
+    extractSubPixelPositionInterpolation( image,
+                                          pos,
+                                          derivativeX,
+                                          derivativeY,
+                                          subPixelPoint,
+                                          response,
+                                          direction );
+}
+
+void extractSubPixelPositionSecondFacet(
+    const cv::Mat& image, const cv::Point& pos, const cv::Mat& derivativeX,
+    const cv::Mat& derivativeY, cv::Point2f& subPixelPoint, float& response,
+    cv::Point2f& direction )
+{
+    std::vector< float > magnitudes( 9 );
+    std::vector< float > facetModel( 6 );
+
+    /*magnitudeNeighbourhood( imageSobelX,
+                                        imageSobelY,
+                                        point,
+                                        Neighbourhood::EightConnected,
+                                        magnitudes );*/
+
+    imageNeighbourhood( image, pos, Neighbourhood::EightConnected, magnitudes );
+
+    secondFacetModel( magnitudes, facetModel );
+
     //     | a     b |
     // H:= |         |
     //     | c     d |
@@ -1273,6 +1334,208 @@ void extractSubPixelPosition( const std::vector< float >& facetModel,
 
     cv::Point2f eigenVector1;
     cv::Point2f eigenVector2;
+    float eigenValue1 { };
+    float eigenValue2 { };
+
+    cv::Mat H( 2, 2, CV_32FC1 );
+    H.at< float >( 0, 0 ) = fxx;
+    H.at< float >( 0, 1 ) = fxy;
+    H.at< float >( 1, 0 ) = fxy;
+    H.at< float >( 1, 1 ) = fyy;
+
+    calculateEigenValuesVectors(
+        H, eigenValue1, eigenValue2, eigenVector1, eigenVector2 );
+
+    if ( eigenValue1 < eigenValue2 )
+    {
+        std::cout << "Error\n";
+    }
+
+    const double nx = eigenVector1.x;
+    const double ny = eigenVector1.y;
+    /*response = std::abs( eigenValue1 );*/
+    /*response = std::abs( f );*/
+    response = std::sqrt( fx * fx + fy * fy );
+
+    // Having the highest eigenvalue and corresponding eigenvector defined on
+    // position 1 we can calculate the sub pixel offset described in the paper.
+
+    //                    rx * nx + ry * ny
+    // t = - -------------------------------------------
+    //       rxx * nx^2 + 2 * rxy * nx * ny + ryy * ny^2
+
+    const auto divisor = fxx * nx * nx + 2.0 * fxy * nx * ny + fyy * ny * ny;
+    double t { };
+    if ( ! isZero( divisor ) )
+    {
+        t = -( fx * nx + fy * ny ) / divisor;
+    }
+
+    // Having t the sub pixel point is defined as:
+    // (px, py) = (t * nx, t * ny)
+    // And the rule for (px, py) ELEMENT [-0.5, 0.5] X [-0.5, 0.5]
+    double px = nx * t;
+    double py = ny * t;
+
+    if ( std::fabs( px ) > 0.5 )
+    {
+        px = 0.0;
+    }
+
+    if ( std::fabs( py ) > 0.5 )
+    {
+        py = 0.0;
+    }
+
+    auto x = static_cast< double >( pos.x );
+    auto y = static_cast< double >( pos.y );
+
+    x += px;
+    y += py;
+
+    subPixelPoint = { static_cast< float >( x ), static_cast< float >( y ) };
+
+    direction = { static_cast< float >( nx ), static_cast< float >( ny ) };
+    // const double a = std::atan2( y, x );
+    // direction = a >= 0.0 ? a : a + CV_2PI;
+}
+
+void extractSubPixelPositionInterpolation(
+    const cv::Mat& image, const cv::Point& pos, const cv::Mat& derivativeX,
+    const cv::Mat& derivativeY, cv::Point2f& subPixelPoint, float& response,
+    cv::Point2f& direction )
+{
+    const auto nx = static_cast< float >( derivativeX.at< int16_t >( pos ) );
+    const auto ny = static_cast< float >( derivativeY.at< int16_t >( pos ) );
+
+    direction = cv::Point2f( nx, ny );
+    direction = direction / cv::norm( direction );
+
+    auto dir = std::atan2( ny, nx ) * 180.0f / CV_PI + 180.0f;
+
+    constexpr std::array< int32_t, 4 > posXp { { 1, 1, 0, -1 } };
+    constexpr std::array< int32_t, 4 > posXm { { -1, -1, 0, 1 } };
+
+    constexpr std::array< int32_t, 4 > posYp { { 0, -1, -1, -1 } };
+    constexpr std::array< int32_t, 4 > posYm { { 0, 1, 1, 1 } };
+
+    auto d = [ &dir ]( )
+    {
+        if ( ( dir > 157.5 && dir <= 202.5 ) || dir <= 22.5 || dir > 337.5 )
+        {
+            return 0;
+        }
+
+        if ( ( dir > 22.5 && dir <= 67.5 ) || ( dir > 202.5 && dir <= 247.5 ) )
+        {
+            return 1;
+        }
+
+        if ( ( dir > 67.5 && dir <= 112.5 ) || ( dir > 247.5 && dir <= 292.5 ) )
+        {
+            return 2;
+        }
+
+        return 3;
+    };
+
+    const auto edgeDir = d( );
+
+    const auto x = pos.x;
+    const auto y = pos.y;
+
+    auto xp = x + posXp.at( edgeDir );
+    auto xm = x + posXm.at( edgeDir );
+
+    auto yp = y + posYp.at( edgeDir );
+    auto ym = y + posYm.at( edgeDir );
+
+    if ( xm < 0 )
+    {
+        xm = 0;
+    }
+
+    if ( xp > derivativeX.cols )
+    {
+        xp = derivativeX.cols;
+    }
+
+    if ( ym < 0 )
+    {
+        ym = 0;
+    }
+
+    if ( yp > derivativeX.rows )
+    {
+        yp = derivativeX.rows;
+    }
+
+    const auto Kp = amplitude( derivativeX, derivativeY, { yp, xp } );
+    const auto Km = amplitude( derivativeX, derivativeY, { ym, xm } );
+    const auto Ko = amplitude( derivativeX, derivativeY, { y, x } );
+
+    response = Ko;
+
+    //            Km - Kp
+    // n = ------------------------
+    //     2 * ( Km - 2 * Ko + Kp )
+    const auto top = Km - Kp;
+    const auto bottom = Km - 2.0f * Ko + Kp;
+
+    float n { };
+    if ( ! isZero( bottom ) )
+    {
+        n = 0.5f * top / bottom;
+    }
+
+    if ( std::fabs( n ) > 0.5 )
+    {
+        n = 0.0f;
+    }
+
+    subPixelPoint = cv::Point2f( static_cast< float >( x ) + n,
+                                 static_cast< float >( y ) + n );
+}
+
+void calculateEigenValuesVectors( const cv::Mat& src, float& eigenValue1,
+                                  float& eigenValue2, cv::Point2f& eigenVector1,
+                                  cv::Point2f& eigenVector2 )
+{
+    calculateEigenValuesVectorsCv(
+        src, eigenValue1, eigenValue2, eigenVector1, eigenVector2 );
+
+    /* calculateEigenValuesVectorsSelf(
+         src, eigenValue1, eigenValue2, eigenVector1, eigenVector2 );*/
+}
+
+void calculateEigenValuesVectorsCv( const cv::Mat& src, float& eigenValue1,
+                                    float& eigenValue2,
+                                    cv::Point2f& eigenVector1,
+                                    cv::Point2f& eigenVector2 )
+{
+    cv::Mat eigenValues;
+    cv::Mat eigenVectors;
+
+    cv::eigen( src, eigenValues, eigenVectors );
+    // const cv::PCA pca( src, cv::Mat( ), cv::PCA::DATA_AS_ROW, 0 );
+
+    eigenValue1 = eigenValues.at< float >( 0, 0 );
+    eigenValue2 = eigenValues.at< float >( 1, 0 );
+    // std::cout << eigenValues << '\n';
+
+    eigenVector1 = eigenVectors.at< cv::Vec2f >( 0, 0 );
+    eigenVector2 = eigenVectors.at< cv::Vec2f >( 1, 0 );
+    // std::cout << eigenVectors << '\n';
+}
+
+void calculateEigenValuesVectorsSelf( const cv::Mat& src, float& eigenValue1,
+                                      float& eigenValue2,
+                                      cv::Point2f& eigenVector1,
+                                      cv::Point2f& eigenVector2 )
+{
+    const auto fxx = src.at< float >( 0, 0 );
+    const auto fxy = src.at< float >( 0, 1 );
+    const auto fyy = src.at< float >( 1, 1 );
 
     // According to the paper we need to calculate the eigenvalues and
     // eigenvectors of the hessian to determine the subpixel position
@@ -1286,9 +1549,9 @@ void extractSubPixelPosition( const std::vector< float >& facetModel,
     const auto secondTerm =
         0.5f * std::sqrt( 4.0f * fxy * fxy + ( fxx - fyy ) * ( fxx - fyy ) );
 
-    auto eigenValue1 = firstTerm - secondTerm;
+    eigenValue1 = firstTerm - secondTerm;
 
-    auto eigenValue2 = firstTerm + secondTerm;
+    eigenValue2 = firstTerm + secondTerm;
 
     if ( eigenValue2 > eigenValue1 )
     {
@@ -1349,65 +1612,57 @@ void extractSubPixelPosition( const std::vector< float >& facetModel,
         eigenVector1 /= cv::norm( eigenVector1 );
         eigenVector2 /= cv::norm( eigenVector2 );
     }
+}
 
-    // For the subpixel position we need the eigenvalue with the highest
-    // absolute value
-    // The largest eigenvalue of G is the equivalent of the gradient
-    // magnitude
-    double nx;
-    double ny;
-    if ( std::abs( eigenValue1 ) > std::abs( eigenValue2 ) )
+void imageNeighbourhood( const cv::Mat& image, const cv::Point2i& position,
+                         const Neighbourhood& neighbourhood,
+                         std::vector< float >& magnitudes )
+{
+    const auto imageWidth = image.cols;
+    const auto imageHeight = image.rows;
+
+    const auto x = position.x;
+    const auto y = position.y;
+
+    const auto top = y - 1 >= 0 ? y - 1 : y;
+    const auto down = y + 1 < imageHeight ? y + 1 : y;
+    const auto left = x - 1 >= 0 ? x - 1 : x;
+    const auto right = x + 1 < imageWidth ? x + 1 : x;
+
+    switch ( neighbourhood )
     {
-        nx = eigenVector1.x;
-        ny = eigenVector1.y;
-        response = static_cast< float >( std::abs( eigenValue1 ) );
-    }
-    else
+    case Neighbourhood::FourConnected:
     {
-        nx = eigenVector2.x;
-        ny = eigenVector2.y;
-        response = static_cast< float >( std::abs( eigenValue2 ) );
-    }
-
-    // Having the highest eigenvalue and corresponding eigenvector defined on
-    // position 1 we can calculate the sub pixel offset described in the paper.
-
-    //                    rx * nx + ry * ny
-    // t = - -------------------------------------------
-    //       rxx * nx^2 + 2 * rxy * nx * ny + ryy * ny^2
-
-    const auto divisor = fxx * nx * nx + 2.0 * fxy * nx * ny + fyy * ny * ny;
-    double t { };
-    if ( ! isZero( divisor ) )
-    {
-        t = -( fx * nx + fy * ny ) / divisor;
+        magnitudes[ 0 ] = pixelValue( image, cv::Point2i( x, top ) );
+        magnitudes[ 1 ] = pixelValue( image, cv::Point2i( left, y ) );
+        magnitudes[ 2 ] = pixelValue( image, cv::Point2i( x, y ) );
+        magnitudes[ 3 ] = pixelValue( image, cv::Point2i( right, y ) );
+        magnitudes[ 4 ] = pixelValue( image, cv::Point2i( x, down ) );
+        break;
     }
 
-    // Having t the sub pixel point is defined as:
-    // (px, py) = (t * nx, t * ny)
-    // And the rule for (px, py) ELEMENT [-0.5, 0.5] X [-0.5, 0.5]
-    double px = nx * t;
-    double py = ny * t;
-
-    if ( std::fabs( px ) > 0.5 )
+    case Neighbourhood::EightConnected:
     {
-        px = 0.0;
+        magnitudes[ 0 ] = pixelValue( image, cv::Point2i( left, top ) );
+        magnitudes[ 1 ] = pixelValue( image, cv::Point2i( x, top ) );
+        magnitudes[ 2 ] = pixelValue( image, cv::Point2i( right, top ) );
+        magnitudes[ 3 ] = pixelValue( image, cv::Point2i( left, y ) );
+        magnitudes[ 4 ] = pixelValue( image, cv::Point2i( x, y ) );
+        magnitudes[ 5 ] = pixelValue( image, cv::Point2i( right, y ) );
+        magnitudes[ 6 ] = pixelValue( image, cv::Point2i( left, down ) );
+        magnitudes[ 7 ] = pixelValue( image, cv::Point2i( x, down ) );
+        magnitudes[ 8 ] = pixelValue( image, cv::Point2i( right, down ) );
+        break;
     }
-
-    if ( std::fabs( py ) > 0.5 )
-    {
-        py = 0.0;
     }
+}
 
-    auto x = static_cast< double >( position.x );
-    auto y = static_cast< double >( position.y );
+float pixelValue( const cv::Mat& image, const cv::Point2i& position )
+{
+    const auto x = position.x;
+    const auto y = position.y;
 
-    x += px;
-    y += py;
+    const auto rowPtr = image.ptr< uint8_t >( y );
 
-    subPixelPoint = { static_cast< float >( x ), static_cast< float >( y ) };
-
-    direction = { static_cast< float >( nx ), static_cast< float >( ny ) };
-    // const double a = std::atan2( y, x );
-    // direction = a >= 0.0 ? a : a + CV_2PI;
+    return rowPtr[ x ];
 }
