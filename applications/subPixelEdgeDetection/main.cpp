@@ -104,8 +104,7 @@ void applyCanny( int, void* )
                 const auto& pt = contour.subPixContour[ i ];
                 const auto dir = contour.direction[ i ];
                 /*const auto length = static_cast< int32_t >(
-                    std::round( contour.response[ i ] / responseMax * 10.0f )
-                   );*/
+                    std::round( contour.response[ i ] / responseMax * 10.0f ) );*/
                 const auto length = 10.0f;
 
                 const auto p2 = pt + dir * length;
@@ -135,7 +134,7 @@ int main( [[maybe_unused]] int argc, [[maybe_unused]] char** argv )
     //
     // Read the test image
     //
-    source = cv::imread( "Test.bmp", cv::IMREAD_GRAYSCALE );
+    source = cv::imread( "TestImage.bmp", cv::IMREAD_GRAYSCALE );
 
     //
     // If the test image is not available, create a dummy one
@@ -145,7 +144,7 @@ int main( [[maybe_unused]] int argc, [[maybe_unused]] char** argv )
         source = cv::Mat( 512, 512, CV_8UC1, cv::Scalar::all( 0 ) );
 
         // Draw a circle to the center
-        // cv::circle( source, { 256, 256 }, 100, cv::Scalar::all( 128 ), -1 );
+        //cv::circle( source, { 256, 256 }, 100, cv::Scalar::all( 128 ), -1 );
 
         cv::ellipse( source,
                      { 256, 256 },
@@ -156,8 +155,8 @@ int main( [[maybe_unused]] int argc, [[maybe_unused]] char** argv )
                      cv::Scalar::all( 128 ),
                      -1 );
 
-        // const auto rect = cv::Rect( 64, 64, 256, 256 );
-        // cv::rectangle( source, rect, cv::Scalar::all( 128 ), -1 );
+        //const auto rect = cv::Rect( 64, 64, 256, 256 );
+        //cv::rectangle( source, rect, cv::Scalar::all( 128 ), -1 );
 
         cv::GaussianBlur( source, source, cv::Size( 15, 15 ), 0 );
     }
