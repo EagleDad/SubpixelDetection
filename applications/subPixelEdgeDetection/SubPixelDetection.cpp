@@ -1455,9 +1455,9 @@ void extractSubPixelPositionInterpolation(
         xm = 0;
     }
 
-    if ( xp > derivativeX.cols )
+    if ( xp >= derivativeX.cols )
     {
-        xp = derivativeX.cols;
+        xp = derivativeX.cols - 1;
     }
 
     if ( ym < 0 )
@@ -1465,14 +1465,14 @@ void extractSubPixelPositionInterpolation(
         ym = 0;
     }
 
-    if ( yp > derivativeX.rows )
+    if ( yp >= derivativeX.rows )
     {
-        yp = derivativeX.rows;
+        yp = derivativeX.rows - 1;
     }
 
-    const auto Kp = amplitude( derivativeX, derivativeY, { yp, xp } );
-    const auto Km = amplitude( derivativeX, derivativeY, { ym, xm } );
-    const auto Ko = amplitude( derivativeX, derivativeY, { y, x } );
+    const auto Kp = amplitude( derivativeX, derivativeY, { xp, yp } );
+    const auto Km = amplitude( derivativeX, derivativeY, { xm, ym } );
+    const auto Ko = amplitude( derivativeX, derivativeY, { x, y } );
 
     response = Ko;
 
