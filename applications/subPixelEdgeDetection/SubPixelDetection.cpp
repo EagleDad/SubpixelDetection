@@ -1483,6 +1483,16 @@ void extractSubPixelPositionInterpolation(
         yp = derivativeX.rows - 1;
     }
 
+	if ( ym >= derivativeX.rows )
+    {
+        ym = derivativeX.rows - 1;
+    }
+
+    if ( yp < 0 )
+    {
+        yp = 0;
+    }
+
     const auto Kp = amplitude( derivativeX, derivativeY, { xp, yp } );
     const auto Km = amplitude( derivativeX, derivativeY, { xm, ym } );
     const auto Ko = amplitude( derivativeX, derivativeY, { x, y } );
