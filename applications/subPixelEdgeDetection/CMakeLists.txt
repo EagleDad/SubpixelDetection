@@ -3,7 +3,7 @@ set_compiler_flags(THIRD_PARTY)
 # Don't use PROJECT_NAME as target name, it's too tight of a relationship
 set(EXECUTABLE_NAME "subPixelEdgeDetection")
 
-find_package(OpenCV  REQUIRED )
+find_package( OpenCV REQUIRED )
 
 message(STATUS "OPENCV_ROOT: ${OPENCV_ROOT}")
 message(STATUS "OpenCV_LIBS: ${OpenCV_LIBS}")
@@ -13,8 +13,10 @@ include_directories( ${OpenCV_INCLUDE_DIRS} )
 
 add_executable(${EXECUTABLE_NAME}
     main.cpp
-	Graph.cpp
-	Graph.h
+    Deriche.cpp
+    Deriche.h
+    Graph.cpp
+    Graph.h
     SubPixelDetection.cpp
     SubPixelDetection.h
 )

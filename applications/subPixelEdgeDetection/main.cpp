@@ -1,3 +1,4 @@
+#include "Deriche.h"
 #include "SubPixelDetection.h"
 
 // OpenCV includes
@@ -21,6 +22,14 @@ int apertureIndex = 0;
 // Gaussian blur size
 int blurAmount = 0;
 int maxBlurAmount = 20;
+
+// Edge detector
+int edgeDetector = 0;
+int maxEdgeDetector = 1;
+// 0 -> Sobel, 1 -> Deriche
+
+int alphaFactor = 1;
+int maxAlphaFactor = 250;
 
 bool drawGradient { false };
 
@@ -48,11 +57,34 @@ void applyCanny( int, void* )
     // Canny requires aperture size to be odd
     const int32_t apertureSize = apertureSizes[ apertureIndex ];
 
+    cv::Mat derivativeX;
+    cv::Mat derivativeY;
+    const auto alpha = alphaFactor / 100.0;
+
+    if ( edgeDetector == 0 )
+    {
+        cv::Sobel( blurredSrc, derivativeX, CV_16SC1, 1, 0, apertureSize );
+        cv::Sobel( blurredSrc, derivativeY, CV_16SC1, 0, 1, apertureSize );
+    }
+    else
+    {
+        const auto omega = alpha / 1000;
+        dericheX( blurredSrc, derivativeX, alpha, omega );
+        dericheY( blurredSrc, derivativeY, alpha, omega );
+        derivativeX.convertTo( derivativeX, CV_16SC1 );
+        derivativeY.convertTo( derivativeY, CV_16SC1 );
+    }
+
     // Apply canny to get the edges
-    cv::Canny( blurredSrc, edges, lowThreshold, highThreshold, apertureSize );
+    // cv::Canny( blurredSrc, edges, lowThreshold, highThreshold, apertureSize
+    // );
+
+    cv::Canny( derivativeX, derivativeY, edges, lowThreshold, highThreshold );
 
     auto contours = edgesSubPix( source,
                                  blurAmount,
+                                 alpha,
+                                 edgeDetector,
                                  apertureSizes[ apertureIndex ],
                                  lowThreshold,
                                  highThreshold );
@@ -104,7 +136,8 @@ void applyCanny( int, void* )
                 const auto& pt = contour.subPixContour[ i ];
                 const auto dir = contour.direction[ i ];
                 /*const auto length = static_cast< int32_t >(
-                    std::round( contour.response[ i ] / responseMax * 10.0f ) );*/
+                    std::round( contour.response[ i ] / responseMax * 10.0f )
+                   );*/
                 const auto length = 10.0f;
 
                 const auto p2 = pt + dir * length;
@@ -144,7 +177,7 @@ int main( [[maybe_unused]] int argc, [[maybe_unused]] char** argv )
         source = cv::Mat( 512, 512, CV_8UC1, cv::Scalar::all( 0 ) );
 
         // Draw a circle to the center
-        //cv::circle( source, { 256, 256 }, 100, cv::Scalar::all( 128 ), -1 );
+        // cv::circle( source, { 256, 256 }, 100, cv::Scalar::all( 128 ), -1 );
 
         cv::ellipse( source,
                      { 256, 256 },
@@ -155,8 +188,8 @@ int main( [[maybe_unused]] int argc, [[maybe_unused]] char** argv )
                      cv::Scalar::all( 128 ),
                      -1 );
 
-        //const auto rect = cv::Rect( 64, 64, 256, 256 );
-        //cv::rectangle( source, rect, cv::Scalar::all( 128 ), -1 );
+        // const auto rect = cv::Rect( 64, 64, 256, 256 );
+        // cv::rectangle( source, rect, cv::Scalar::all( 128 ), -1 );
 
         cv::GaussianBlur( source, source, cv::Size( 15, 15 ), 0 );
     }
@@ -184,6 +217,17 @@ int main( [[maybe_unused]] int argc, [[maybe_unused]] char** argv )
                         &apertureIndex,
                         maxapertureIndex,
                         applyCanny );
+
+    // Trackbar to control the edge detector
+    cv::createTrackbar( "Edge Detector",
+                        windowName,
+                        &edgeDetector,
+                        maxEdgeDetector,
+                        applyCanny );
+
+    // Trackbar to control the alpha factor
+    cv::createTrackbar(
+        "Alpha", windowName, &alphaFactor, maxAlphaFactor, applyCanny );
 
     // Trackbar to control the blur
     cv::createTrackbar(

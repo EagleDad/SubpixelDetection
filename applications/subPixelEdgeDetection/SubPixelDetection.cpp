@@ -1,4 +1,5 @@
 #include "SubPixelDetection.h"
+#include "Deriche.h"
 #include "Graph.h"
 
 // Std includes
@@ -159,6 +160,7 @@ float pixelValue( const cv::Mat& image, const cv::Point2i& position );
 ///
 
 std::vector< Contour > edgesSubPix( const cv::Mat& imageIn, int32_t blurSize,
+                                    double alpha, int32_t edgeDetector,
                                     int32_t derivativeSize, double lowThreshold,
                                     double highThreshold )
 {
@@ -179,17 +181,28 @@ std::vector< Contour > edgesSubPix( const cv::Mat& imageIn, int32_t blurSize,
     // Since we want to calculate subpixel edges, the derivatives are required.
     // We calculated them here and pass them to the canny operator that they are
     // not calculated twice.
-    cv::Mat imageSobelX;
-    cv::Mat imageSobelY;
+    cv::Mat derivativeX;
+    cv::Mat derivativeY;
 
-    cv::Sobel( imageBlurred, imageSobelX, CV_16S, 1, 0, derivativeSize );
-    cv::Sobel( imageBlurred, imageSobelY, CV_16S, 0, 1, derivativeSize );
+    if ( edgeDetector == 0 )
+    {
+        cv::Sobel( imageBlurred, derivativeX, CV_16SC1, 1, 0, derivativeSize );
+        cv::Sobel( imageBlurred, derivativeY, CV_16SC1, 0, 1, derivativeSize );
+    }
+    else
+    {
+        const auto omega = alpha / 1000;
+        dericheX( imageBlurred, derivativeX, alpha, omega );
+        dericheY( imageBlurred, derivativeY, alpha, omega );
+        derivativeX.convertTo( derivativeX, CV_16SC1 );
+        derivativeY.convertTo( derivativeY, CV_16SC1 );
+    }
 
     // Calculate canny edges bases on the derivatives
     // Apply canny to get the edges
     cv::Mat imageCanny;
     cv::Canny(
-        imageSobelX, imageSobelY, imageCanny, lowThreshold, highThreshold );
+        derivativeX, derivativeY, imageCanny, lowThreshold, highThreshold );
 
     // Note: The Canny image is not everywhere 1 pixel, we might run a thinning
     // on the edge image.
@@ -231,8 +244,8 @@ std::vector< Contour > edgesSubPix( const cv::Mat& imageIn, int32_t blurSize,
             {
                 extractSubPixelPosition( imageBlurred,
                                          point,
-                                         imageSobelX,
-                                         imageSobelY,
+                                         derivativeX,
+                                         derivativeY,
                                          subPixelPoint,
                                          resp,
                                          dir );

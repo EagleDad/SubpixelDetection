@@ -13,6 +13,6 @@ struct Contour
     std::vector< cv::Point2f > direction;
 };
 
-std::vector< Contour > edgesSubPix( const cv::Mat& imageIn, int32_t blurSize,
+std::vector< Contour > edgesSubPix( const cv::Mat& imageIn, int32_t blurSize, double alpha, int32_t edgeDetector,
                                     int32_t derivativeSize, double lowThreshold,
                                     double highThreshold );

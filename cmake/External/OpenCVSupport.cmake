@@ -1,3 +1,5 @@
+set( OPENCV_VERSION "4.10.0" )
+set( PROJECT_NAME "opencv")
 
 set( OpenCV_DEPENDS "" )
 
@@ -6,8 +8,8 @@ if (BUILD_WITH_OPENCV_CONTRIB)
     ExternalProject_Add(
         opencv_contrib
         GIT_REPOSITORY      https://github.com/opencv/opencv_contrib.git
-        GIT_TAG             4.5.5
-        SOURCE_DIR "${FETCHCONTENT_BASE_DIR}/opencv_contrib/opencv_contrib-4.5.5/src"
+        GIT_TAG             ${VERSION}
+        SOURCE_DIR "${FETCHCONTENT_BASE_DIR}/opencv_contrib/opencv_contrib-${OPENCV_VERSION}/src"
         BINARY_DIR ""
         INSTALL_DIR ""
         UPDATE_COMMAND ""
@@ -19,23 +21,24 @@ if (BUILD_WITH_OPENCV_CONTRIB)
     
     list(APPEND OpenCV_DEPENDS "opencv_contrib")
     
-    set(OPENCV_CONTRIB_MODULE_PATH ${FETCHCONTENT_BASE_DIR}/opencv_contrib/opencv_contrib-4.5.5/src/modules )
+    set(OPENCV_CONTRIB_MODULE_PATH ${FETCHCONTENT_BASE_DIR}/opencv_contrib/opencv_contrib-${OPENCV_VERSION}/src/modules )
     
     list(APPEND OPENCV_EXTRA_BUILD_FLAGS "-DOPENCV_EXTRA_MODULES_PATH:PATH=${OPENCV_CONTRIB_MODULE_PATH}")
     
+    #Don't build these contrib modules, they fail on VS.
+    #list(APPEND OPENCV_EXTRA_BUILD_FLAGS -DBUILD_opencv_bioinspired:BOOL=FALSE)
+
 endif()
 
-MESSAGE(STATUS "OPENCV_EXTRA_BUILD_FLAGS: ${OPENCV_EXTRA_BUILD_FLAGS}")
-
 ExternalProject_Add(
-    opencv
+    ${PROJECT_NAME}
     DEPENDS ${OpenCV_DEPENDS}
-    PREFIX ${FETCHCONTENT_BASE_DIR}/opencv
+    PREFIX ${FETCHCONTENT_BASE_DIR}/${PROJECT_NAME}
     GIT_REPOSITORY      https://github.com/opencv/opencv.git
-    GIT_TAG             4.5.5
-    SOURCE_DIR "${FETCHCONTENT_BASE_DIR}/opencv/opencv-4.5.5/src"
-    BINARY_DIR "${FETCHCONTENT_BASE_DIR}/opencv/opencv-4.5.5/build"
-    INSTALL_DIR "${FETCHCONTENT_BASE_DIR}/opencv/opencv-4.5.5/install"
+    GIT_TAG             ${OPENCV_VERSION}
+    SOURCE_DIR "${FETCHCONTENT_BASE_DIR}/${PROJECT_NAME}/${PROJECT_NAME}-${OPENCV_VERSION}/src"
+    BINARY_DIR "${FETCHCONTENT_BASE_DIR}/${PROJECT_NAME}/${PROJECT_NAME}-${OPENCV_VERSION}/build"
+    INSTALL_DIR "${FETCHCONTENT_BASE_DIR}/${PROJECT_NAME}/${PROJECT_NAME}-${OPENCV_VERSION}/install"
     CMAKE_ARGS
     -DCMAKE_INSTALL_PREFIX:PATH=<INSTALL_DIR>
     -DCMAKE_BUILD_TYPE=Release
@@ -59,6 +62,8 @@ ExternalProject_Add(
     -DBUILD_opencv_apps:BOOL=FALSE
     -DBUILD_JAVA:BOOL=FALSE
     -DBUILD_PACKAGE:BOOL=FALSE
+	-DBUILD_JAVA:BOOL=FALSE
+    -DBUILD_PACKAGE:BOOL=FALSE
 	-DWITH_FFMPEG:BOOL=TRUE
 	-DWITH_GSTREAMER:BOOL=TRUE
 	-DWITH_MSMF:BOOL=TRUE
@@ -69,9 +74,10 @@ ExternalProject_Add(
     ${OPENCV_EXTRA_BUILD_FLAGS}
 )
 
-list(APPEND DEPENDENCIES opencv)
+list(APPEND DEPENDENCIES ${PROJECT_NAME})
 
-set(OpenCV_DIR "${FETCHCONTENT_BASE_DIR}/opencv/opencv-4.5.5/install")
+set(OpenCV_DIR "${FETCHCONTENT_BASE_DIR}/${PROJECT_NAME}/${PROJECT_NAME}-${OPENCV_VERSION}/install" )
+set(OPENCV_INSTALL_DIR "${FETCHCONTENT_BASE_DIR}/${PROJECT_NAME}/${PROJECT_NAME}-${OPENCV_VERSION}/install/" )
 
 list(APPEND EXTRA_CMAKE_ARGS
     -DOpenCV_DIR:PATH=${OpenCV_DIR}
